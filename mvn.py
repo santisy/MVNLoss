@@ -5,14 +5,13 @@ from torch.autograd import Function
 
 
 """
-TODO: 1. For now, not Support Batch: to resolve this problem, we should wrap a loop outside this function
-TODO: 2. the leverage of numpy shared memory here will not work in cuda tensor: not so nice solution is from the 
-        beginning of entrance of the function, check if they are in GPU; transfer them to CPU without exception and 
-        to see if we need to transfer them back to GPU according to situation
-TODO: 3. convert input to double
-
 Note:
       1. Here is calculating the log distribution, not the original distribution
+      2. For now, not Support Batch: to resolve this problem, we should wrap a loop outside this function
+      3. the leverage of numpy shared memory here will not work in cuda tensor: not so nice solution is from the 
+        beginning of entrance of the function, check if they are in GPU; transfer them to CPU without exception and 
+        to see if we need to transfer them back to GPU according to a flag
+      4. convert input to double
 """
 
 class MVNLoss(Function):
@@ -33,8 +32,6 @@ class MVNLoss(Function):
         :param dim: the dimension of the distribution
         :return: forward output
         """
-        # self.save_for_backward(params, input)
-
         try:
             if params.is_cuda and input.is_cuda:
                 CUDA_FLAG = True
@@ -89,8 +86,6 @@ class MVNLoss(Function):
         1. the covariance matrix we construct from the output of RNN is positive definite
         2. the parameters we get from RNN through this operation is [1, ~], while the input is [dim, 1]
         """
-        # params, input = self.saved_variables
-
         grad_output = grad_output[0, 0] # extract the scalar from PyTorch tensor
 
         inv_sing_mat = self.inv_sing_mat
@@ -103,10 +98,9 @@ class MVNLoss(Function):
         mid_result1 = torch.mm(input_minus_miu.t(), input_minus_miu)
 
         grad_sigma1 = -torch.mm(torch.mm(inv_sing_mat, mid_result1), inv_sing_mat)
-        # print(grad_sigma1)
         grad_sigma2 = inv_sing_mat
-        # print(grad_sigma2)
         grad_sigma = -(1.0/2)*(grad_sigma1 + grad_sigma2)*grad_output
+        grad_sigma = 2.0*grad_sigma - grad_sigma*torch.eye(dim).double()
 
         grad_sigma_np = grad_sigma.numpy()
 
