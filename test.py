@@ -1,7 +1,7 @@
 import torch
 from torch.autograd import Variable
 from torch.autograd import gradcheck
-from learn_basic import MVNLoss
+from mvn import MVNLoss
 
 # Test one dimension MVN
 # input = (Variable(torch.Tensor([0, 4]).double().view(1, 2), requires_grad=True),
