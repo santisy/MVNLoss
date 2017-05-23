@@ -1,6 +1,7 @@
 import torch
 from torch.autograd import Variable
-from torch.autograd import gradcheck
+# from torch.autograd import gradcheck
+from gradientcheck import gradcheck
 from mvn import MVNLoss
 
 # Test one dimension MVN
@@ -44,7 +45,6 @@ print("gradient check of Three-dimension test: {}".format(test))
 # explicitly show the actual calculated forward result and backward gradient
 input = (torch.Tensor([0, 0, 8, 2, 8]).double().view(1, 5),
          torch.Tensor([1, 1]).double().view(2, 1))
-
 
 if torch.cuda.is_available():
     input = list(input)
