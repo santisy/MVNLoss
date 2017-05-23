@@ -15,7 +15,7 @@ def mvn_op(params, input):
 
     for i in xrange(num_batch):
         mvn = MVNLoss()
-        output[i, 0] = mvn(params[i, :].view(1, num_params), input[:, i].view(dim, 1))
+        output[i, 0] = mvn(params[i, :].contiguous().view(1, num_params), input[:, i].contiguous().view(dim, 1))
 
     return output
 
