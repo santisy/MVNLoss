@@ -22,9 +22,9 @@ class MVNLoss(Function):
         self.dim = None
         self.input_minus_miu = None
         self.inv_sing_mat = None
-        self.CUDA_FLAG = None
+        self.double_flag = None
 
-    def forward(self, params, input):
+    def forward(self, miu_vec, cov_mat, input_vec):
         """
         :param params: vector miu and unique elements of covariance matrix sigma
                        the first dim number of params is miu and then is sigma
@@ -32,50 +32,50 @@ class MVNLoss(Function):
         :param dim: the dimension of the distribution
         :return: forward output
         """
+
+
         try:
-            if params.is_cuda and input.is_cuda:
-                CUDA_FLAG = True
-            elif not params.is_cuda and not input.is_cuda:
-                CUDA_FLAG = False
+            if isinstance(cov_mat, torch.cuda.DoubleTensor) and isinstance(input_vec, torch.cuda.DoubleTensor) or \
+                    isinstance(cov_mat, torch.DoubleTensor) and isinstance(input_vec, torch.DoubleTensor):
+                self.double_flag = True
+            elif isinstance(cov_mat, torch.cuda.FloatTensor) and isinstance(input_vec, torch.cuda.FloatTensor) or \
+                    isinstance(cov_mat, torch.FloatTensor) and isinstance(input_vec, torch.FloatTensor):
+                self.double_flag = False
             else:
-                raise ValueError("params and input are not in the same kind of device")
-        except ValueError as err:
+                raise RuntimeError("params and input have different precisions")
+        except RuntimeError as err:
             print(err.message)
 
-        params = params.cpu().double()
-        input = input.cpu().double()
+        miu_vec = miu_vec.double()
+        cov_mat = cov_mat.double()
+        input_vec = input_vec.double()
 
-        dim = np.prod(input.size())
-        param_dim = np.prod(params.size())
+        dim = cov_mat.size(0)
 
-        assert (param_dim == (dim*dim/2.0+(3.0/2)*dim)), "dimension does not match"
+        assert (input_vec.size(1)==dim), "dimension does not match"
 
-        sigma = np.zeros((dim, dim))
-        sigma_t = torch.from_numpy(sigma)
-        iu = np.triu_indices(dim)
-        sigma[iu] = params[0, dim:].numpy()
-        sigma_t = sigma_t.t() + sigma_t
-        sigma_t = sigma_t - torch.diag(torch.diag(sigma_t))/2.0
-
-        # the miu
-        miu = params[0, :dim].view(-1, dim)
-
-        input_raw = input.view(-1, dim)
-        input_minus_miu = input_raw - miu # 1xdim vector
-        u_mat, sing_values, v_mat = torch.svd(sigma_t)
-        inv_sing_mat = torch.mm(torch.mm(u_mat, torch.diag(1./sing_values)), v_mat.t())
+        input_minus_miu = input_vec - miu_vec# 1xdim vector
+        inv_sing_mat = torch.inverse(cov_mat)
 
         self.dim = dim
         self.input_minus_miu = input_minus_miu
         self.inv_sing_mat = inv_sing_mat
-        self.CUDA_FLAG = CUDA_FLAG
 
-        output = - dim/2.0 * np.log(2*np.pi) + (-1.0/2) * np.log(torch.prod(sing_values)) + \
+        det = np.linalg.det(cov_mat.cpu().numpy())
+        try:
+            if det<0:
+                raise ValueError("negative determinant of covariance matrix")
+        except ValueError as err:
+            print(err.message)
+
+        # print('{}\n'.format(det))
+
+        output = - dim/2.0 * np.log(2*np.pi) + (-1.0/2) * np.log(det) + \
                  (-1.0/2)*torch.mm(torch.mm(input_minus_miu, inv_sing_mat), input_minus_miu.t())
 
         # the output is actually the log pdf
-        if CUDA_FLAG:
-            output = output.cuda()
+        if not self.double_flag:
+            output = output.float()
 
         return output
 
@@ -86,13 +86,12 @@ class MVNLoss(Function):
         1. the covariance matrix we construct from the output of RNN is positive definite
         2. the parameters we get from RNN through this operation is [1, ~], while the input is [dim, 1]
         """
+        grad_output = grad_output.double()
         grad_output = grad_output[0, 0] # extract the scalar from PyTorch tensor
 
         inv_sing_mat = self.inv_sing_mat
         input_minus_miu = self.input_minus_miu
         dim = self.dim
-
-        grad_params = torch.zeros((1, int(dim*dim/2.0+(3.0/2)*dim)))
 
         # gradients of covariance matrix
         mid_result1 = torch.mm(input_minus_miu.t(), input_minus_miu)
@@ -100,23 +99,17 @@ class MVNLoss(Function):
         grad_sigma1 = -torch.mm(torch.mm(inv_sing_mat, mid_result1), inv_sing_mat)
         grad_sigma2 = inv_sing_mat
         grad_sigma = -(1.0/2)*(grad_sigma1 + grad_sigma2)*grad_output
-        grad_sigma = 2.0*grad_sigma - grad_sigma*torch.eye(dim).double()
-
-        grad_sigma_np = grad_sigma.numpy()
-
-        iu = np.triu_indices(dim)
-        grad_params[0, dim:] = torch.Tensor(grad_sigma_np[iu])
+        # grad_sigma = 2.0*grad_sigma - grad_sigma*torch.eye(dim).double()
 
         # gradients of miu
         grad_miu = -torch.mm(inv_sing_mat, -input_minus_miu.t())*grad_output
 
-        grad_params[0, :dim] = grad_miu
-
         # gradients of input
         grad_input = -torch.mm(inv_sing_mat, input_minus_miu.t())*grad_output
 
-        if self.CUDA_FLAG:
-            grad_params = grad_params.cuda()
-            grad_input = grad_input.cuda()
+        if not self.double_flag:
+            grad_sigma = grad_sigma.float()
+            grad_input = grad_input.float()
+            grad_miu = grad_miu.float()
 
-        return grad_params, grad_input
+        return grad_miu, grad_sigma, grad_input
